@@ -1,0 +1,64 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual Environments
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Environment variables & Secrets (NEVER COMMIT SECRETS)
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.cert
+
+# Local Database & Dynamic Submissions
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.sqlite
+data/*.sqlite3
+data/topgun.db*
+data/submissions/train/*
+data/submissions/test/*
+!data/submissions/train/.gitkeep
+!data/submissions/test/.gitkeep
+!data/images/train/.gitkeep
+!data/images/test/.gitkeep
+
+# Client Downloads & Test Artifacts
+downloaded_images/
+downloaded_samples/
+*.zip
+*.tar.gz
+topgun_*.zip
+
+# Generated Secret CSV files
+team_credentials.csv
+team_keys.csv
+
+# Logs & Runtime files
+*.log
+*.pid
+*.tmp
+*.bak
+
+# Editors & Operating System Files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Streamlit config cache
+.streamlit/
