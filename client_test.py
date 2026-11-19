@@ -40,7 +40,7 @@ except ImportError:
 # ==============================================================================
 # HTTP Evaluation Server
 DEFAULT_HTTP_URL = "http://127.0.0.1:8000"          # Competition API Domain (e.g. https://api.yourdomain.com)
-DEFAULT_HTTP_TOKEN = "YOUR_TEAM_PASSWORD"           # Team login password for the website
+DEFAULT_HTTP_TOKEN = "yout-key"           # Team login password for the website
 
 # MQTT Broker (Summary Scores)
 DEFAULT_MQTT_HOST = "tesa-score.c333m.site"         # Hostname only (no https://)

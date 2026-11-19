@@ -1,17 +1,17 @@
-version: '3.8'
-
 services:
   api:
     build: .
     container_name: topgun_api
+    restart: unless-stopped
     ports:
       - "8000:8000"
     environment:
       - ENV=production
-      - ADMIN_API_KEY=topgun_admin_super_secret_key
-      - DATABASE_URL=postgresql+asyncpg://postgres:topgun_pass@db:5432/topgun_db
-      - DEFAULT_TEST_QUOTA=5
-      - DEFAULT_GLOBAL_MODE=all
+      - ADMIN_API_KEY=${ADMIN_API_KEY:-topgun_admin_super_secret_key}
+      - DATABASE_URL=postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-topgun_pass}@db:5432/${POSTGRES_DB:-topgun_db}
+      - DEFAULT_TEST_QUOTA=${DEFAULT_TEST_QUOTA:-5}
+      - DEFAULT_GLOBAL_MODE=${DEFAULT_GLOBAL_MODE:-all}
+      - MAX_SUBMISSION_WINDOW_SECONDS=${MAX_SUBMISSION_WINDOW_SECONDS:-0}
     depends_on:
       db:
         condition: service_healthy
@@ -21,16 +21,17 @@ services:
   db:
     image: postgres:15-alpine
     container_name: topgun_db
+    restart: unless-stopped
     environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=topgun_pass
-      - POSTGRES_DB=topgun_db
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-topgun_pass}
+      - POSTGRES_DB=${POSTGRES_DB:-topgun_db}
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d topgun_db"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-topgun_db}"]
       interval: 5s
       timeout: 5s
       retries: 5
