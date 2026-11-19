@@ -112,20 +112,21 @@ def cmd_import_csv(args):
             delimiter = ","
 
         reader = csv.DictReader(f, delimiter=delimiter)
-        fieldnames = reader.fieldnames or []
+        raw_fieldnames = reader.fieldnames or []
+        fieldnames = [c.strip() for c in raw_fieldnames]
 
         # Find columns
         name_col = args.name_col
         if not name_col:
             for c in fieldnames:
-                if any(k in c.lower() for k in ["name", "team", "id"]):
+                if any(k in c.lower() for k in ["name", "team", "id", "teamid"]):
                     name_col = c
                     break
 
         key_col = args.key_col
         if not key_col:
             for c in fieldnames:
-                if any(k in c.lower() for k in ["key", "token", "secret"]):
+                if any(k in c.lower() for k in ["key", "token", "secret", "pass", "pwd", "password"]):
                     key_col = c
                     break
 
@@ -144,7 +145,8 @@ def cmd_import_csv(args):
         print(f"[*] Detected Columns -> Team: '{name_col}', Key: '{key_col}', Quota: '{quota_col}'")
 
         items = []
-        for row in reader:
+        for raw_row in reader:
+            row = {str(k).strip(): str(v).strip() for k, v in raw_row.items() if k is not None}
             t_name = str(row.get(name_col, "")).strip()
             if not t_name:
                 continue

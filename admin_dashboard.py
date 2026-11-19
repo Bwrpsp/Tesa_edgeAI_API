@@ -28,7 +28,7 @@ headers = {"X-Admin-Key": admin_key}
 
 def api_get(endpoint: str):
     try:
-        with httpx.Client(timeout=10.0) as client:
+        with httpx.Client(timeout=30.0) as client:
             return client.get(f"{server_url.rstrip('/')}{endpoint}", headers=headers)
     except Exception as e:
         st.error(f"Failed to connect to server: {e}")
@@ -37,7 +37,7 @@ def api_get(endpoint: str):
 
 def api_post(endpoint: str, json_data: dict):
     try:
-        with httpx.Client(timeout=10.0) as client:
+        with httpx.Client(timeout=60.0) as client:
             return client.post(f"{server_url.rstrip('/')}{endpoint}", json=json_data, headers=headers)
     except Exception as e:
         st.error(f"API request failed: {e}")
@@ -158,20 +158,27 @@ with tab_import:
     # Determine data source
     raw_csv_content = None
     if uploaded_file is not None:
-        raw_csv_content = uploaded_file.getvalue().decode("utf-8", errors="replace")
+        raw_csv_content = uploaded_file.getvalue().decode("utf-8-sig", errors="replace")
     elif pasted_text.strip():
         raw_csv_content = pasted_text.strip()
 
     if raw_csv_content:
+        parsed_df = None
         try:
             # Flexible reading with delimiter detection
             parsed_df = pd.read_csv(io.StringIO(raw_csv_content), sep=None, engine="python")
-            st.write("**Parsed Columns Found:**", list(parsed_df.columns))
+            # Strip whitespace from column names so ' Password' becomes 'Password'
+            parsed_df.columns = [str(c).strip() for c in parsed_df.columns]
+        except Exception as e:
+            st.error(f"Error parsing CSV content: {e}")
 
-            # Auto-detection of columns
+        if parsed_df is not None and not parsed_df.empty:
             cols = list(parsed_df.columns)
-            name_candidates = [c for c in cols if any(k in str(c).lower() for k in ["name", "team", "id"])]
-            key_candidates = [c for c in cols if any(k in str(c).lower() for k in ["key", "token", "sec"])]
+            st.write("**Parsed Columns Found:**", cols)
+
+            # Auto-detection of columns with expanded keywords
+            name_candidates = [c for c in cols if any(k in str(c).lower() for k in ["name", "team", "id", "teamid", "user"])]
+            key_candidates = [c for c in cols if any(k in str(c).lower() for k in ["key", "token", "sec", "pass", "pwd", "password"])]
             quota_candidates = [c for c in cols if any(k in str(c).lower() for k in ["quota", "limit"])]
 
             col_map1, col_map2, col_map3 = st.columns(3)
@@ -190,12 +197,12 @@ with tab_import:
             import_records = []
             for _, row in parsed_df.iterrows():
                 t_name = str(row[col_name]).strip()
-                if not t_name or t_name == "nan":
+                if not t_name or t_name.lower() == "nan":
                     continue
                 t_key = None
                 if col_key != "(None / Auto-Generate)":
                     raw_k = str(row[col_key]).strip()
-                    if raw_k and raw_k != "nan":
+                    if raw_k and raw_k.lower() != "nan":
                         t_key = raw_k
 
                 t_q = None
@@ -211,18 +218,28 @@ with tab_import:
             st.dataframe(pd.DataFrame(import_records), use_container_width=True)
 
             if st.button("🚀 Import / Update All Teams in Database", type="primary"):
-                import_res = api_post("/api/v1/admin/teams/import", {
-                    "teams": import_records,
-                    "default_quota": default_quota_input
-                })
-                if import_res and import_res.status_code == 200:
-                    res_data = import_res.json()
-                    st.success(f"Successfully processed {res_data.get('total')} teams!")
-                    st.rerun()
-                elif import_res:
-                    st.error(f"Import failed: {import_res.json().get('detail', import_res.text)}")
-        except Exception as e:
-            st.error(f"Error parsing CSV data: {e}")
+                with st.spinner("Importing teams into database..."):
+                    import_res = api_post("/api/v1/admin/teams/import", {
+                        "teams": import_records,
+                        "default_quota": default_quota_input
+                    })
+                    if import_res is not None:
+                        if import_res.status_code == 200:
+                            try:
+                                res_data = import_res.json()
+                                total_processed = res_data.get("total", len(import_records))
+                            except Exception:
+                                total_processed = len(import_records)
+                            st.success(f"✅ Successfully processed {total_processed} teams!")
+                            st.rerun()
+                        else:
+                            try:
+                                err_msg = import_res.json().get("detail", import_res.text)
+                            except Exception:
+                                err_msg = import_res.text or f"HTTP {import_res.status_code}"
+                            st.error(f"❌ Server Error (HTTP {import_res.status_code}): {err_msg}")
+                    else:
+                        st.error(f"❌ Could not communicate with server at {server_url}. Please ensure the server is running and the Server URL in the sidebar is correct.")
 
 # -----------------------------------------------------------------------------
 # TAB 2: Edit & Adjust Teams (Rename, Set Key, Change Quota, Delete)
