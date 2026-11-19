@@ -1,136 +1,332 @@
 """
-TopGun Client Demonstration & Verification Script
+TopGun Competition - Complete Client Pipeline (HTTP + MQTT)
+================================================================================
+Pipeline Workflow:
+  1. GET Image via HTTP      -> Fetches image binary + 'X-Image-ID' + 'X-Image-Name'
+  2. Process Image (Model)   -> Runs CV/AI inference (polygon objects & defect counts)
+  3. Send HTTP Submission    -> Posts polygon predictions to /api/v1/submit
+  4. Send MQTT Submission    -> Publishes summary counts & defect_ratio via WebSocket MQTT
 
-This script simulates a team agent:
-1. Calls GET /api/v1/image with team token.
-2. Reads the 'X-Image-ID' header and saves the downloaded image.
-3. Submits mock prediction JSON back to POST /api/v1/submit with the img_id.
-4. Calls GET /api/v1/stats to show updated team statistics.
-
-Usage:
-    python client_test.py --token <YOUR_TEAM_TOKEN> --url http://127.0.0.1:8000 --mode train
+IMPORTANT CREDENTIALS NOTE:
+  - HTTP Bearer Token: Your team's LOGIN PASSWORD for the competition website.
+  - MQTT Key:          Generated inside the website (My Team / Dashboard).
+                       *HTTP password and MQTT key are DIFFERENT!*
+================================================================================
 """
 
 import argparse
+import getpass
 import json
+import ssl
+import sys
+import threading
 import time
+import uuid
 from pathlib import Path
-import httpx
+
+try:
+    import requests
+except ImportError:
+    raise SystemExit('Please install requests: python -m pip install requests')
+
+try:
+    import paho.mqtt.client as mqtt
+except ImportError:
+    raise SystemExit('Please install paho-mqtt: python -m pip install "paho-mqtt>=2,<3"')
 
 
-def run_test(server_url: str, token: str, mode: str):
-    server_url = server_url.rstrip("/")
-    headers = {"Authorization": f"Bearer {token}"}
+# ==============================================================================
+# 1. CONFIGURATION (Set your defaults here)
+# ==============================================================================
+# HTTP Evaluation Server
+DEFAULT_HTTP_URL = "http://127.0.0.1:8000"          # Competition API Domain (e.g. https://api.yourdomain.com)
+DEFAULT_HTTP_TOKEN = "YOUR_TEAM_PASSWORD"           # Team login password for the website
 
-    print("=" * 60)
-    print(f"TopGun Client Test - Mode: {mode.upper()}")
-    print(f"Server: {server_url}")
-    print(f"Token:  {token[:8]}...{token[-4:]}")
-    print("=" * 60)
+# MQTT Broker (Summary Scores)
+DEFAULT_MQTT_HOST = "tesa-score.c333m.site"         # Hostname only (no https://)
+DEFAULT_TEAM_ID = "TEAM_01"                         # Team ID (e.g. TEAM_01)
+DEFAULT_MQTT_KEY = "YOUR_GENERATED_MQTT_KEY"        # Generated on website under My Team
+DEFAULT_TRACK = "EdgeAI"                            # "Embedded", "EdgeAI", or "Market"
+DEFAULT_EVENT = "1"                                 # Event ID (e.g. "1")
+# ==============================================================================
 
-    with httpx.Client(timeout=30.0) as client:
-        # -----------------------------------------------------------
-        # Step 1: Request Image
-        # -----------------------------------------------------------
-        print(f"\n[1/4] Requesting image (mode='{mode}')...")
-        start_req = time.time()
+
+def run_inference(image_bytes: bytes, img_name: str):
+    """
+    >>> YOUR MODEL INFERENCE LOGIC GOES HERE <<<
+    
+    Accepts:
+        image_bytes (bytes): Raw bytes of the received image
+        img_name (str): Original filename of the image (e.g. 'Parchment_test.jpg')
         
-        img_resp = client.get(f"{server_url}/api/v1/image", params={"mode": mode}, headers=headers)
-        elapsed_download = time.time() - start_req
+    Returns:
+        tuple (predictions_dict, mqtt_summary_dict, latency_ms)
+    """
+    start_time = time.time()
 
-        if img_resp.status_code != 200:
-            print(f"[-] Error fetching image: HTTP {img_resp.status_code}")
-            try:
-                print(f"[-] Detail: {img_resp.json()}")
-            except Exception:
-                print(f"[-] Raw: {img_resp.text}")
-            return
+    # --------------------------------------------------------------------------
+    # TODO: Replace below with your actual YOLO / OpenCV / PyTorch inference
+    # --------------------------------------------------------------------------
+    # Simulate inference time (e.g. 150ms)
+    time.sleep(0.15)
 
-        img_id = img_resp.headers.get("X-Image-ID")
-        content_type = img_resp.headers.get("Content-Type", "image/png")
-        ext = ".png" if "png" in content_type else ".jpg"
+    # 1. Prediction payload for HTTP Ground Truth evaluation (Polygon format)
+    http_predictions = {
+        "image_name": img_name,
+        "objects": [
+            {
+                "id": 1,
+                "class": "parchment",
+                "polygon": [
+                    [767, 1335],
+                    [766, 1336],
+                    [765, 1336],
+                    [764, 1336],
+                    [763, 1336]
+                ]
+            },
+            {
+                "id": 2,
+                "class": "broken",
+                "polygon": [
+                    [500, 800],
+                    [520, 810],
+                    [510, 830]
+                ]
+            }
+        ]
+    }
 
-        print(f"[+] Success! HTTP 200 OK")
-        print(f"    - Image ID:      {img_id}")
-        print(f"    - Content-Type:  {content_type}")
-        print(f"    - Download Size: {len(img_resp.content):,} bytes")
-        print(f"    - Transfer Time: {elapsed_download:.3f}s")
+    # 2. Defect counts and defect_ratio for MQTT Scoreboard
+    counts = {
+        "good": 10,
+        "shell": 0,
+        "black": 0,
+        "husk": 0,
+        "broken": 1,
+        "parchment": 1,
+        "immature": 0
+    }
+    
+    total_beans = sum(counts.values())
+    defect_beans = total_beans - counts.get("good", 0)
+    defect_ratio = round(defect_beans / total_beans, 4) if total_beans > 0 else 0.0
 
-        # Save received image locally to verify it is intact
-        output_dir = Path("downloaded_samples")
-        output_dir.mkdir(exist_ok=True)
-        saved_file = output_dir / f"received_{img_id}{ext}"
-        saved_file.write_bytes(img_resp.content)
-        print(f"    - Saved image to: {saved_file.resolve()}")
+    latency_ms = int((time.time() - start_time) * 1000)
 
-        # -----------------------------------------------------------
-        # Step 2: Simulate Model Inference / Processing
-        # -----------------------------------------------------------
-        print("\n[2/4] Simulating local inference (0.5s pause)...")
-        time.sleep(0.5)
+    mqtt_summary = {
+        "image": img_name,
+        "latency_ms": latency_ms,
+        "counts": counts,
+        "defect_ratio": defect_ratio
+    }
 
-        # -----------------------------------------------------------
-        # Step 3: Submit Prediction JSON
-        # -----------------------------------------------------------
-        mock_predictions = {
-            "hello": "world",
-            "model_version": "v1.0-benchmark",
-            "detected_objects": [
-                {"label": "object_A", "confidence": 0.96, "bbox": [12, 45, 100, 220]},
-                {"label": "object_B", "confidence": 0.88, "bbox": [150, 80, 230, 190]}
-            ],
-            "client_timestamp": time.time()
-        }
+    return http_predictions, mqtt_summary, latency_ms
 
-        submit_payload = {
-            "img_id": img_id,
-            "predictions": mock_predictions
-        }
 
-        print(f"\n[3/4] Submitting predictions for img_id '{img_id}'...")
-        sub_resp = client.post(
-            f"{server_url}/api/v1/submit",
-            json=submit_payload,
-            headers=headers
-        )
+def publish_mqtt(host: str, team_id: str, mqtt_key: str, track: str, event: str, payload_dict: dict):
+    """Publish summary message to TESA MQTT WebSocket Broker on port 443."""
+    client_id = f"{team_id}:python-{uuid.uuid4().hex[:12]}"
+    topic = f"/event/{mqtt_key}/{track}/{event}"
+    
+    payload_bytes = json.dumps(payload_dict).encode("utf-8")
+    if len(payload_bytes) > 65536:
+        raise ValueError("MQTT payload exceeds the broker's 64 KiB limit.")
 
-        if sub_resp.status_code != 200:
-            print(f"[-] Submission failed: HTTP {sub_resp.status_code}")
-            try:
-                print(f"[-] Detail: {sub_resp.json()}")
-            except Exception:
-                print(f"[-] Raw: {sub_resp.text}")
-            return
+    connected = threading.Event()
+    acknowledged = threading.Event()
+    connect_errors = []
+    publish_errors = []
 
-        sub_data = sub_resp.json()
-        print(f"[+] Submission Accepted!")
-        print(f"    - Server Message:   {sub_data.get('message')}")
-        print(f"    - Recorded Latency: {sub_data.get('duration_seconds')}s (from image delivery finish to submit)")
-        print(f"    - Timestamp:        {sub_data.get('received_at')}")
+    def on_connect(client, userdata, flags, reason_code, properties):
+        if reason_code.is_failure:
+            connect_errors.append(str(reason_code))
+        connected.set()
 
-        # -----------------------------------------------------------
-        # Step 4: Check Team Stats
-        # -----------------------------------------------------------
-        print("\n[4/4] Querying current team statistics...")
-        stats_resp = client.get(f"{server_url}/api/v1/stats", headers=headers)
-        if stats_resp.status_code == 200:
-            stats = stats_resp.json()
-            print(f"[+] Stats for {stats.get('team_name')}:")
-            print(f"    Train Mode -> Requested: {stats['train_mode']['images_requested']} | Submissions: {stats['train_mode']['submissions_received']}")
-            print(f"    Test Mode  -> Quota: {stats['test_mode']['quota_limit']} | Requested: {stats['test_mode']['images_requested']} | Submissions: {stats['test_mode']['submissions_received']} | Remaining: {stats['test_mode']['remaining_attempts']}")
-        else:
-            print(f"[-] Could not load stats: HTTP {stats_resp.status_code}")
+    def on_publish(client, userdata, mid, reason_code, properties):
+        if reason_code.is_failure:
+            publish_errors.append(str(reason_code))
+        acknowledged.set()
 
-    print("\n" + "=" * 60)
-    print("Verification complete! System is working as expected.")
-    print("=" * 60)
+    client = mqtt.Client(
+        mqtt.CallbackAPIVersion.VERSION2,
+        client_id=client_id,
+        transport="websockets",
+        protocol=mqtt.MQTTv5,
+        reconnect_on_failure=False,
+    )
+    client.username_pw_set(team_id, mqtt_key)
+    client.ws_set_options(path="/mqtt/")
+    client.tls_set_context(ssl.create_default_context())
+    client.connect_timeout = 10
+    client.on_connect = on_connect
+    client.on_publish = on_publish
+
+    started = False
+    try:
+        client.connect(host, 443, keepalive=30)
+        client.loop_start()
+        started = True
+
+        if not connected.wait(15):
+            raise RuntimeError("MQTT connection timed out. Check host and credentials.")
+        if connect_errors:
+            raise RuntimeError("MQTT login rejected: " + connect_errors[0])
+
+        result = client.publish(topic, payload_bytes, qos=1, retain=False)
+        if result.rc != mqtt.MQTT_ERR_SUCCESS:
+            raise RuntimeError("MQTT publish failed: " + mqtt.error_string(result.rc))
+
+        if not acknowledged.wait(15):
+            raise RuntimeError("MQTT publish: No acknowledgement received.")
+        if publish_errors:
+            raise RuntimeError("MQTT publish rejected: " + publish_errors[0])
+
+        print("    [+] MQTT Broker acknowledged the message!")
+    finally:
+        client.disconnect()
+        if started:
+            client.loop_stop()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="TopGun Competition Client Pipeline (HTTP + MQTT)")
+    parser.add_argument("--http-url", default=DEFAULT_HTTP_URL, help="HTTP Server base URL")
+    parser.add_argument("--http-token", default=DEFAULT_HTTP_TOKEN, help="Team HTTP password")
+    parser.add_argument("--team-id", default=DEFAULT_TEAM_ID, help="Team ID (e.g. TEAM_01)")
+    parser.add_argument("--mqtt-key", default=DEFAULT_MQTT_KEY, help="MQTT Key generated from website")
+    parser.add_argument("--mqtt-host", default=DEFAULT_MQTT_HOST, help="MQTT Host")
+    parser.add_argument("--track", default=DEFAULT_TRACK, choices=["Embedded", "EdgeAI", "Market"], help="Track")
+    parser.add_argument("--event", default=DEFAULT_EVENT, help="Event ID")
+    parser.add_argument("--skip-mqtt", action="store_true", help="Skip MQTT publishing step")
+    args = parser.parse_args()
+
+    http_url = args.http_url.rstrip("/")
+    http_token = args.http_token
+    team_id = args.team_id
+    mqtt_key = args.mqtt_key
+
+    # Check credentials
+    if http_token == "YOUR_TEAM_PASSWORD":
+        http_token = getpass.getpass("Enter Team HTTP Password (website login): ").strip()
+    if not args.skip_mqtt and mqtt_key == "YOUR_GENERATED_MQTT_KEY":
+        mqtt_key = getpass.getpass("Enter Team MQTT Key (generated on website): ").strip()
+
+    print("=" * 70)
+    print("🚀 TopGun Pipeline: HTTP Fetch -> Model Inference -> HTTP Submit -> MQTT")
+    print(f"HTTP Server: {http_url}")
+    print(f"MQTT Broker: {args.mqtt_host}:443/mqtt/ (Track: {args.track}, Event: {args.event})")
+    print(f"Team ID:     {team_id}")
+    print("=" * 70)
+
+    # --------------------------------------------------------------------------
+    # STEP 1: Fetch Image from HTTP Server
+    # --------------------------------------------------------------------------
+    print("\n[1/4] Fetching image from HTTP server...")
+    http_headers = {"Authorization": f"Bearer {http_token}"}
+    
+    t_start_req = time.time()
+    try:
+        img_resp = requests.get(f"{http_url}/api/v1/image", headers=http_headers, timeout=30)
+    except requests.exceptions.RequestException as e:
+        print(f"[-] Connection Error: {e}")
+        sys.exit(1)
+
+    if img_resp.status_code != 200:
+        print(f"[-] Failed to fetch image (HTTP {img_resp.status_code}): {img_resp.text}")
+        sys.exit(1)
+
+    image_bytes = img_resp.content
+    img_id = img_resp.headers.get("X-Image-ID")
+    img_name = img_resp.headers.get("X-Image-Name", "image.jpg")
+    mode = img_resp.headers.get("X-Mode", "train")
+    dl_time = time.time() - t_start_req
+
+    print(f"[+] Image Received successfully!")
+    print(f"    - Image ID:       {img_id}")
+    print(f"    - Image Name:     {img_name}")
+    print(f"    - Mode:           {mode.upper()}")
+    print(f"    - Size:           {len(image_bytes):,} bytes")
+    print(f"    - Transfer Time:  {dl_time:.3f}s")
+
+    # Save image locally for inspection
+    save_folder = Path("downloaded_images")
+    save_folder.mkdir(exist_ok=True)
+    save_path = save_folder / img_name
+    save_path.write_bytes(image_bytes)
+    print(f"    - Saved file:     {save_path}")
+
+    # --------------------------------------------------------------------------
+    # STEP 2: Run Model Inference
+    # --------------------------------------------------------------------------
+    print(f"\n[2/4] Running model inference on '{img_name}'...")
+    http_predictions, mqtt_summary, latency_ms = run_inference(image_bytes, img_name)
+    print(f"[+] Inference complete ({latency_ms} ms)")
+    print(f"    - Detected objects: {len(http_predictions.get('objects', []))}")
+    print(f"    - Defect Ratio:     {mqtt_summary['defect_ratio']}")
+
+    # --------------------------------------------------------------------------
+    # STEP 3: Submit Results to HTTP Server
+    # --------------------------------------------------------------------------
+    print(f"\n[3/4] Submitting predictions to HTTP server ({http_url}/api/v1/submit)...")
+    submit_payload = {
+        "img_id": img_id,
+        "predictions": http_predictions
+    }
+    
+    try:
+        sub_resp = requests.post(f"{http_url}/api/v1/submit", json=submit_payload, headers=http_headers, timeout=30)
+    except requests.exceptions.RequestException as e:
+        print(f"[-] HTTP Submit Error: {e}")
+        sys.exit(1)
+
+    if sub_resp.status_code != 200:
+        print(f"[-] HTTP Submission rejected (HTTP {sub_resp.status_code}): {sub_resp.text}")
+        sys.exit(1)
+
+    sub_data = sub_resp.json()
+    print(f"[+] HTTP Submission ACCEPTED!")
+    print(f"    - Server Latency: {sub_data.get('duration_seconds')}s (delivery finish -> submit)")
+    print(f"    - Received At:    {sub_data.get('received_at')}")
+
+    # --------------------------------------------------------------------------
+    # STEP 4: Send Summary to MQTT Broker
+    # --------------------------------------------------------------------------
+    if args.skip_mqtt:
+        print("\n[4/4] MQTT sending skipped (--skip-mqtt flag active).")
+    else:
+        print(f"\n[4/4] Publishing summary to MQTT Broker ({args.mqtt_host}:443/mqtt/)...")
+        print("    Payload to publish:")
+        print(f"    {json.dumps(mqtt_summary, indent=4)}")
+
+        try:
+            publish_mqtt(
+                host=args.mqtt_host,
+                team_id=team_id,
+                mqtt_key=mqtt_key,
+                track=args.track,
+                event=args.event,
+                payload_dict=mqtt_summary
+            )
+            print(f"[+] MQTT Submission COMPLETE for topic: /event/<MQTT_KEY>/{args.track}/{args.event}")
+        except Exception as e:
+            print(f"[-] MQTT Publish Error: {e}")
+
+    # Query latest stats
+    try:
+        st_resp = requests.get(f"{http_url}/api/v1/stats", headers=http_headers, timeout=5)
+        if st_resp.status_code == 200:
+            st_data = st_resp.json()
+            print("\n" + "-" * 70)
+            print(f"📊 Current Team Statistics for '{st_data['team_name']}':")
+            print(f"  • Train Mode -> Requested: {st_data['train_mode']['images_requested']} | Submitted: {st_data['train_mode']['submissions_received']}")
+            print(f"  • Test Mode  -> Quota: {st_data['test_mode']['quota_limit']} | Submitted: {st_data['test_mode']['submissions_received']} | Remaining Attempts: {st_data['test_mode']['remaining_attempts']}")
+            print("-" * 70)
+    except Exception:
+        pass
+
+    print("\n✅ All 4 steps finished successfully!")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="TopGun Client Verification")
-    parser.add_argument("--url", default="http://127.0.0.1:8000", help="Base URL of TopGun server")
-    parser.add_argument("--token", required=True, help="Team secret token (tg_...)")
-    parser.add_argument("--mode", choices=["train", "test"], default="train", help="Mode: train or test")
-    args = parser.parse_args()
-
-    run_test(server_url=args.url, token=args.token, mode=args.mode)
+    main()
