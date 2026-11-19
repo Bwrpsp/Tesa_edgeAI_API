@@ -18,7 +18,7 @@ from pathlib import Path
 # ==============================================================================
 # CONFIGURATION - EMBEDDED SETTINGS
 # ==============================================================================
-SERVER_URL = os.environ.get("SERVER_URL", "https://your-domain.com")  # Replace with your Cloudflare domain
+SERVER_URL = os.environ.get("SERVER_URL", "https://127.0.0.1:8000")  # Replace with your Cloudflare domain
 TEAM_TOKEN = os.environ.get("TEAM_TOKEN", "PASTE_YOUR_TEAM_TOKEN_HERE") # Put your team token here
 SAVE_DOWNLOADED_IMAGE = True             # Set to True to save downloaded images
 # ==============================================================================

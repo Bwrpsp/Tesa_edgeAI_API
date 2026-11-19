@@ -268,7 +268,22 @@ def cmd_export(args):
         if resp.status_code == 200:
             out_file = Path(args.output)
             out_file.write_bytes(resp.content)
-            print(f"[+] Successfully exported submissions ({len(resp.content):,} bytes) to: {out_file.resolve()}")
+            print(f"[+] Successfully exported submissions package ({len(resp.content):,} bytes) to: {out_file.resolve()}")
+            print("    Contains all JSON prediction files + 'train_manifest.csv' & 'test_manifest.csv'")
+        else:
+            print(f"[-] Error: HTTP {resp.status_code} - {resp.text}")
+
+
+def cmd_export_csv(args):
+    with get_client(args.url, args.admin_key) as client:
+        print(f"[*] Requesting {args.mode.upper()} manifest CSV...")
+        resp = client.get("/api/v1/admin/export/csv", params={"mode": args.mode})
+        if resp.status_code == 200:
+            out_file = Path(args.output)
+            out_file.write_text(resp.text, encoding="utf-8")
+            lines = [l for l in resp.text.strip().split("\n") if l.strip()]
+            count = max(0, len(lines) - 1)
+            print(f"[+] Successfully exported {count} records to: {out_file.resolve()}")
         else:
             print(f"[-] Error: HTTP {resp.status_code} - {resp.text}")
 
@@ -332,8 +347,13 @@ def main():
     subparsers.add_parser("stats", help="Show overview stats for all teams")
 
     # export-data
-    p_export = subparsers.add_parser("export-data", help="Download all JSON submissions as a zip")
+    p_export = subparsers.add_parser("export-data", help="Download all JSON submissions and CSV manifests as a zip")
     p_export.add_argument("--output", default="topgun_export.zip", help="Output file path")
+
+    # export-csv
+    p_export_csv = subparsers.add_parser("export-csv", help="Download submission log CSV for train or test mode")
+    p_export_csv.add_argument("--mode", choices=["train", "test"], default="test", help="Mode: train or test (default: test)")
+    p_export_csv.add_argument("--output", default="manifest.csv", help="Output CSV file path")
 
     args = parser.parse_args()
 
@@ -349,6 +369,7 @@ def main():
         "delete-team": cmd_delete_team,
         "stats": cmd_stats,
         "export-data": cmd_export,
+        "export-csv": cmd_export_csv,
     }
 
     commands[args.command](args)

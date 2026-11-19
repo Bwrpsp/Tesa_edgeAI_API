@@ -209,12 +209,35 @@ If a team's hardware crashed during a test run, grant them extra attempts:
 python admin_cli.py set-quota <team_id> 6
 ```
 
-#### 6. How to Export Submissions for Offline Evaluation
-```bash
-python admin_cli.py export-data --output submissions_final.zip
-```
-This downloads all JSON predictions organized by:
-`submissions/<mode>/<team_name>/<img_id>_<timestamp>.json`
+#### 6. How to Export Submissions & CSV Logs for Evaluation
+* **Download Full ZIP Package (All JSONs + `train_manifest.csv` + `test_manifest.csv`):**
+  ```bash
+  python admin_cli.py export-data --output submissions_final.zip
+  ```
+* **Download Standalone Manifest CSVs (Instant Download):**
+  ```bash
+  # Test Mode Log CSV:
+  python admin_cli.py export-csv --mode test --output test_manifest.csv
+
+  # Train Mode Log CSV:
+  python admin_cli.py export-csv --mode train --output train_manifest.csv
+  ```
+
+#### 📋 Manifest CSV Format
+Every row in `train_manifest.csv` and `test_manifest.csv` contains all the metadata needed for your offline grading script:
+| Column | Description |
+| :--- | :--- |
+| `team_id` | Unique UUID of the team |
+| `team_name` | Name of the team (e.g. `AlphaSquad`) |
+| `img_id` | Unique tracking ID of the image dispatch |
+| `img_name` | Image filename (e.g. `Parchment_test.jpg`) |
+| `time_stamp_get_pic` | ISO 8601 timestamp when image was fetched |
+| `time_stamp_return_` | ISO 8601 timestamp when prediction JSON was received |
+| `duration_seconds` | Exact round-trip latency measured by the server |
+| `file_path` | Relative path to the JSON file inside the ZIP (e.g. `submissions/test/AlphaSquad/img_xxx.json`) |
+| `is_final` | `True` if this is the team's latest submission for this image, `False` for previous attempts |
+| `is_team_latest` | `True` if this is the team's latest overall submission in this mode |
+| `payload_sha256` | SHA-256 hash of the submitted prediction JSON |
 
 ---
 

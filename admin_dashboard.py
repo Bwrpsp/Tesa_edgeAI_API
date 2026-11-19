@@ -302,20 +302,57 @@ with tab_add:
                 st.error(f"Error: {c_res.json().get('detail', c_res.text)}")
 
 # -----------------------------------------------------------------------------
-# TAB 4: Export Submissions
+# TAB 4: Export Submissions & CSV Logs
 # -----------------------------------------------------------------------------
 with tab_export:
-    st.write("#### Download Submissions Package")
-    st.write("Download all submitted JSON predictions in a `.zip` archive for offline model evaluation.")
-    if st.button("📦 Prepare & Download Export Zip"):
-        with httpx.Client(timeout=60.0) as client:
-            exp_res = client.get(f"{server_url.rstrip('/')}{endpoint}", headers=headers) if False else client.get(f"{server_url.rstrip('/')}/api/v1/admin/export", headers=headers)
-            if exp_res.status_code == 200:
+    st.write("#### 📦 Export Submissions & Evaluation Manifests")
+    st.markdown("""
+    Export complete submission logs with timestamps, file paths, image names, and final submission flags.
+    The exported ZIP automatically contains both **`train_manifest.csv`** and **`test_manifest.csv`** at the root!
+    """)
+
+    col_exp_zip, col_exp_csv = st.columns([1, 1])
+
+    with col_exp_zip:
+        st.write("##### 1. Complete Package (.ZIP)")
+        st.write("Contains all JSON prediction files + both `train_manifest.csv` and `test_manifest.csv`.")
+        if st.button("📦 Prepare & Download Full ZIP"):
+            with httpx.Client(timeout=120.0) as client:
+                exp_res = client.get(f"{server_url.rstrip('/')}/api/v1/admin/export", headers=headers)
+                if exp_res.status_code == 200:
+                    st.download_button(
+                        label="⬇️ Click here to save submissions .zip",
+                        data=exp_res.content,
+                        file_name="topgun_submissions_export.zip",
+                        mime="application/x-zip-compressed"
+                    )
+                else:
+                    st.error("Failed to generate zip export.")
+
+    with col_exp_csv:
+        st.write("##### 2. Quick CSV Manifests")
+        st.write("Download standalone CSV logs without packaging all JSON files.")
+        c_mode = st.radio("Select Mode Log", options=["test", "train"], horizontal=True)
+        if st.button(f"📄 Fetch {c_mode.upper()} CSV"):
+            with httpx.Client(timeout=30.0) as client:
+                csv_res = client.get(f"{server_url.rstrip('/')}/api/v1/admin/export/csv?mode={c_mode}", headers=headers)
+                if csv_res.status_code == 200:
+                    csv_text = csv_res.text
+                    st.session_state[f"csv_data_{c_mode}"] = csv_text
+                else:
+                    st.error("Failed to fetch CSV.")
+
+        if f"csv_data_{c_mode}" in st.session_state:
+            csv_str = st.session_state[f"csv_data_{c_mode}"]
+            try:
+                csv_df = pd.read_csv(io.StringIO(csv_str))
+                st.write(f"**Preview of {c_mode.upper()} Submissions ({len(csv_df)} rows):**")
+                st.dataframe(csv_df, use_container_width=True)
                 st.download_button(
-                    label="⬇️ Click here to save submissions .zip",
-                    data=exp_res.content,
-                    file_name="topgun_submissions_export.zip",
-                    mime="application/x-zip-compressed"
+                    label=f"⬇️ Download {c_mode.upper()} Manifest CSV",
+                    data=csv_str.encode("utf-8"),
+                    file_name=f"{c_mode}_manifest.csv",
+                    mime="text/csv"
                 )
-            else:
-                st.error("Failed to generate zip export.")
+            except Exception as e:
+                st.warning(f"No records found or error parsing: {e}")

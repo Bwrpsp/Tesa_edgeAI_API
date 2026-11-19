@@ -127,15 +127,26 @@ class StorageManager:
 
         return stored_location
 
-    def build_export_zip(self) -> io.BytesIO:
-        """Packages all submissions into an in-memory zip archive for admin download."""
+    def build_export_zip(self, train_csv: str = "", test_csv: str = "") -> io.BytesIO:
+        """Packages all submissions into an in-memory zip archive for admin download, including manifest CSVs."""
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            # Include manifest CSVs at the root of the zip
+            if train_csv:
+                zip_file.writestr("train_manifest.csv", train_csv)
+            if test_csv:
+                zip_file.writestr("test_manifest.csv", test_csv)
+
+            # Include all submission JSON files under submissions/
             for root, _, files in os.walk(self.local_submission_dir):
                 for file in files:
+                    if file == ".gitkeep":
+                        continue
                     full_path = Path(root) / file
-                    arcname = full_path.relative_to(self.local_submission_dir)
-                    zip_file.write(full_path, arcname=str(arcname))
+                    rel_path = full_path.relative_to(self.local_submission_dir)
+                    arcname = Path("submissions") / rel_path
+                    zip_file.write(full_path, arcname=str(arcname).replace("\\", "/"))
+
         zip_buffer.seek(0)
         return zip_buffer
 

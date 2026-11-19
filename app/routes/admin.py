@@ -1,6 +1,9 @@
+import csv
+import io
+from pathlib import Path
 from typing import List, Literal, Optional
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -361,10 +364,110 @@ async def get_all_team_stats(db: AsyncSession = Depends(get_db)):
     return stats_list
 
 
+async def generate_mode_csv(db: AsyncSession, mode: str) -> str:
+    """Generate a detailed CSV log of all submissions for the given mode."""
+    stmt = (
+        select(Submission, Team, ImageDispatch)
+        .join(Team, Submission.team_id == Team.id)
+        .outerjoin(ImageDispatch, Submission.dispatch_id == ImageDispatch.id)
+        .where(Submission.mode == mode)
+        .order_by(Team.name.asc(), Submission.received_at.asc())
+    )
+    result = await db.execute(stmt)
+    records = result.all()
+
+    # Pass 1: Determine the latest submission per (team, img_name) and per team overall
+    latest_per_img = {}
+    latest_per_team = {}
+    for sub, team, dispatch in records:
+        img_name = dispatch.file_name if dispatch and dispatch.file_name else "unknown"
+        if (not img_name or img_name == "unknown") and isinstance(sub.json_payload, dict):
+            img_name = sub.json_payload.get("image_name", "unknown")
+
+        key_img = (team.id, img_name)
+        if key_img not in latest_per_img or sub.received_at > latest_per_img[key_img]:
+            latest_per_img[key_img] = sub.received_at
+
+        if team.id not in latest_per_team or sub.received_at > latest_per_team[team.id]:
+            latest_per_team[team.id] = sub.received_at
+
+    # Pass 2: Output CSV
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "team_id",
+        "team_name",
+        "img_id",
+        "img_name",
+        "time_stamp_get_pic",
+        "time_stamp_return_",
+        "duration_seconds",
+        "file_path",
+        "is_final",
+        "is_team_latest",
+        "payload_sha256"
+    ])
+
+    for sub, team, dispatch in records:
+        img_name = dispatch.file_name if dispatch and dispatch.file_name else "unknown"
+        if (not img_name or img_name == "unknown") and isinstance(sub.json_payload, dict):
+            img_name = sub.json_payload.get("image_name", "unknown")
+
+        safe_team = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in team.name)
+        team_folder = storage_manager.local_submission_dir / mode / safe_team
+        matched_files = list(team_folder.glob(f"{sub.img_id}_*.json")) if team_folder.exists() else []
+        if matched_files:
+            file_rel = f"submissions/{mode}/{safe_team}/{matched_files[0].name}"
+        else:
+            file_rel = f"submissions/{mode}/{safe_team}/{sub.img_id}.json"
+
+        time_get = ""
+        if dispatch:
+            dt = dispatch.finished_send_at or dispatch.dispatched_at
+            if dt:
+                time_get = dt.isoformat()
+
+        time_return = sub.received_at.isoformat() if sub.received_at else ""
+        is_final = (sub.received_at == latest_per_img.get((team.id, img_name)))
+        is_team_latest = (sub.received_at == latest_per_team.get(team.id))
+
+        writer.writerow([
+            team.id,
+            team.name,
+            sub.img_id,
+            img_name,
+            time_get,
+            time_return,
+            sub.duration_seconds if sub.duration_seconds is not None else "",
+            file_rel,
+            is_final,
+            is_team_latest,
+            sub.payload_sha256 or ""
+        ])
+
+    return output.getvalue()
+
+
+@router.get("/export/csv")
+async def export_mode_csv(
+    mode: Literal["train", "test"] = Query("test", description="Mode to export: 'train' or 'test'"),
+    db: AsyncSession = Depends(get_db)
+):
+    """Download standalone manifest CSV for train or test mode."""
+    csv_content = await generate_mode_csv(db, mode)
+    return Response(
+        content=csv_content,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{mode}_manifest.csv"'}
+    )
+
+
 @router.get("/export")
-async def export_all_submissions():
-    """Download all submitted predictions packaged in a zip archive."""
-    zip_stream = storage_manager.build_export_zip()
+async def export_all_submissions(db: AsyncSession = Depends(get_db)):
+    """Download all submitted predictions packaged in a zip archive with train and test CSV manifests."""
+    train_csv = await generate_mode_csv(db, "train")
+    test_csv = await generate_mode_csv(db, "test")
+    zip_stream = storage_manager.build_export_zip(train_csv=train_csv, test_csv=test_csv)
     return StreamingResponse(
         zip_stream,
         media_type="application/x-zip-compressed",
