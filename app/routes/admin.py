@@ -17,6 +17,13 @@ from app.storage import storage_manager
 router = APIRouter(prefix="/api/v1/admin", tags=["Admin API"], dependencies=[Depends(verify_admin_key)])
 
 
+def make_token_prefix(token: str) -> str:
+    clean = (token or "").strip()
+    if len(clean) > 8:
+        return clean[:8] + "..."
+    return clean
+
+
 class ModeUpdate(BaseModel):
     mode: Literal["train", "test", "all", "paused"] = Field(..., description="Global competition mode")
 
@@ -103,7 +110,7 @@ async def create_team(payload: TeamCreate, db: AsyncSession = Depends(get_db)):
             detail="Another team is already using this secret token. Tokens must be unique."
         )
 
-    prefix = raw_token[:10] + "..." if len(raw_token) > 10 else raw_token
+    prefix = make_token_prefix(raw_token)
     quota = payload.test_quota_limit if payload.test_quota_limit is not None else settings.DEFAULT_TEST_QUOTA
 
     team = Team(
@@ -143,7 +150,7 @@ async def import_teams(payload: BatchImportRequest, db: AsyncSession = Depends(g
 
         raw_token = item.token.strip() if item.token and item.token.strip() else generate_team_token()
         token_h = hash_token(raw_token)
-        prefix = raw_token[:10] + "..." if len(raw_token) > 10 else raw_token
+        prefix = make_token_prefix(raw_token)
         quota = item.test_quota_limit if item.test_quota_limit is not None else default_quota
 
         existing = (await db.execute(select(Team).where(Team.name == clean_name))).scalar_one_or_none()
@@ -200,7 +207,7 @@ async def batch_create_teams(payload: BatchTeamCreate, db: AsyncSession = Depend
 
         raw_token = generate_team_token()
         token_h = hash_token(raw_token)
-        prefix = raw_token[:10] + "..."
+        prefix = make_token_prefix(raw_token)
 
         team = Team(
             name=clean_name,
@@ -261,7 +268,7 @@ async def edit_team(team_id: str, payload: TeamUpdate, db: AsyncSession = Depend
         if token_check:
             raise HTTPException(status_code=409, detail="Another team is already using this secret token.")
         team.token_hash = new_h
-        team.token_prefix = new_token[:10] + "..." if len(new_token) > 10 else new_token
+        team.token_prefix = make_token_prefix(new_token)
 
     if payload.test_quota_limit is not None:
         team.test_quota_limit = payload.test_quota_limit

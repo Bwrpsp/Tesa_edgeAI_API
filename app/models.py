@@ -23,7 +23,7 @@ class Team(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name = Column(String(100), unique=True, nullable=False, index=True)
     token_hash = Column(String(64), unique=True, nullable=False, index=True)
-    token_prefix = Column(String(12), nullable=False)  # Display e.g. "tg_9a8b..."
+    token_prefix = Column(String(32), nullable=False)  # Display e.g. "tg_9a8b..."
     test_quota_limit = Column(Integer, default=5, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime(timezone=True), default=utc_now)

@@ -15,6 +15,11 @@ async def lifespan(app: FastAPI):
     # Startup: Ensure database schema exists
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        try:
+            from sqlalchemy import text
+            await conn.execute(text("ALTER TABLE teams ALTER COLUMN token_prefix TYPE VARCHAR(32);"))
+        except Exception:
+            pass
 
     # Initialize default system setting if not already present
     async with AsyncSessionLocal() as session:
